@@ -141,7 +141,19 @@ def cmd_check(args) -> int:
     print("Daten-/Konfigordner:  %s" % cfg.data_dir)
     print("Zustandsverzeichnis:  %s" % cfg.state_dir)
     print("ansible-playbook:     %s" % cfg.ansible_playbook)
-    print("Adresse:              http://%s:%s" % (cfg.server["host"], cfg.server["port"]))
+    print("Adresse:              %s" % cfg.base_url)
+    if cfg.tls_enabled:
+        from app.tls import certificate_info
+        info = certificate_info(cfg.tls_cert)
+        if info["exists"]:
+            print("TLS:                   aktiv, Zertifikat %s" % cfg.tls_cert)
+            print("  Fingerabdruck:       %s" % (info["fingerprint_sha256"] or "unbekannt"))
+            if info["days_left"] is not None:
+                print("  Gueltig noch:        %d Tage" % info["days_left"])
+        else:
+            print("TLS:                   aktiv, Zertifikat wird beim Start erzeugt")
+    else:
+        print("TLS:                   aus (unverschluesselt)")
     problems = cfg.validate()
     if problems:
         print("\nProbleme:")

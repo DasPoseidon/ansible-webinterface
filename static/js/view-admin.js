@@ -77,7 +77,9 @@
                 h("dt", { text: "ansible-playbook" }), h("dd", { text: status.ansible_playbook }),
                 h("dt", { text: "Python" }), h("dd", { text: status.python }))),
             h("div", { class: "card" },
-              h("h2", { class: "mb" }, icon("branch", 14), " Git"),
+              h("h2", { class: "mb" }, icon("server", 14), " Verbindung"),
+              tlsPanel(status),
+              h("h2", { class: "mb mt-lg" }, icon("branch", 14), " Git"),
               git.repo
                 ? h("dl", { class: "kv" },
                     h("dt", { text: "Branch" }), h("dd", { text: git.branch || "–" }),
@@ -92,6 +94,60 @@
                 h("dt", { text: "Gespeichert" }), h("dd", { text: String(runs.total || 0) }),
                 h("dt", { text: "Gleichzeitig erlaubt" }), h("dd", { text: String(runs.max_concurrent) }),
                 h("dt", { text: "Aufbewahrt" }), h("dd", { text: runs.keep + " Läufe" })))));
+      }
+
+      function tlsPanel(status) {
+        const tls = status.tls || {};
+        const rows = [
+          h("dt", { text: "Adresse" }), h("dd", { text: status.base_url || "–" }),
+        ];
+        if (!tls.enabled) {
+          return h("div", {},
+            h("dl", { class: "kv" }, rows),
+            h("div", { class: "notice warn small mt" },
+              h("strong", { text: "Unverschlüsselt. " }),
+              "Passwörter und Protokolle gehen im Klartext über das Netz. Solange der " +
+              "Dienst nur auf 127.0.0.1 lauscht, bleibt das im Rechner; sobald er im " +
+              "Netz erreichbar ist, sollte server.tls.enabled auf true stehen."));
+        }
+        if (tls.error) {
+          return h("div", {},
+            h("dl", { class: "kv" }, rows),
+            h("div", { class: "notice error small mt" },
+              h("strong", { text: "TLS ist eingeschaltet, aber fehlerhaft: " }), tls.error));
+        }
+        const fingerprint = tls.fingerprint_sha256 || "unbekannt";
+        rows.push(h("dt", { text: "Zertifikat" }),
+          h("dd", { text: tls.self_signed === false ? "von einer Zertifizierungsstelle"
+                                                    : "selbstsigniert" }));
+        if (tls.not_after) {
+          rows.push(h("dt", { text: "Gültig bis" }),
+            h("dd", {}, tls.not_after,
+              tls.days_left !== null && tls.days_left !== undefined
+                ? h("span", { class: tls.days_left < 30 ? "c-failed" : "faint",
+                              text: "  (noch " + tls.days_left + " Tage)" })
+                : null));
+        }
+        if ((tls.sans || []).length) {
+          rows.push(h("dt", { text: "Gültig für" }),
+            h("dd", { class: "wrap-any", text: tls.sans.join(", ") }));
+        }
+        return h("div", {},
+          h("div", { class: "notice ok small" },
+            icon("check", 13), " Verbindung ist verschlüsselt."),
+          h("dl", { class: "kv mt" }, rows),
+          h("div", { class: "mt" },
+            h("div", { class: "small", text: "Fingerabdruck (SHA-256)" }),
+            h("div", { class: "btn-row", style: { marginTop: "4px" } },
+              h("code", { class: "wrap-any tiny", style: { flex: "1" }, text: fingerprint }),
+              h("button", { class: "small ghost", onclick: () => AW.copyText(fingerprint) },
+                "kopieren")),
+            tls.self_signed !== false
+              ? h("div", { class: "hint", text:
+                  "Bei einem selbstsignierten Zertifikat warnt der Browser. Wer sicher " +
+                  "sein will, dass niemand dazwischensitzt, vergleicht diesen " +
+                  "Fingerabdruck mit dem, den der Browser im Zertifikatsdialog zeigt." })
+              : null));
       }
 
       /* -- Benutzer ----------------------------------------------------- */

@@ -43,6 +43,7 @@ class Services:
         self.git = GitRepo(cfg)
         self.files = FileService(cfg, self.validator, self.git)
         self.cron = CrontabService(cfg)
+        self.tls_info: Dict[str, Any] = {"enabled": cfg.tls_enabled}
 
     # -- Datei fuer den Cron-Client ---------------------------------------
 
@@ -79,6 +80,10 @@ class Services:
             "callback_dir": str(cfg.callback_dir),
             "runs_dir": str(cfg.runs_dir),
             "vault_password_file": cfg.run_cfg.get("vault_password_file") or "",
+            # Bei selbstsigniertem Zertifikat kennt der Client keine Ausstellerkette.
+            # Er bekommt deshalb das Serverzertifikat selbst als Vertrauensanker -
+            # die Verbindung bleibt geprueft, nur eben gegen genau dieses Zertifikat.
+            "ca_file": str(cfg.tls_cert) if cfg.tls_enabled else "",
         }
         try:
             target.parent.mkdir(parents=True, exist_ok=True)

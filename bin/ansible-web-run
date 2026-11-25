@@ -20,6 +20,7 @@ import argparse
 import json
 import os
 import signal
+import ssl
 import subprocess
 import sys
 import time
@@ -75,6 +76,34 @@ def load_client(path: Path) -> dict:
     return data
 
 
+def ssl_context(client: dict) -> "ssl.SSLContext | None":
+    """Prueft das Serverzertifikat - auch wenn es selbstsigniert ist.
+
+    Ein selbstsigniertes Zertifikat kennt keine Ausstellerkette. Statt die
+    Pruefung abzuschalten, wird genau dieses Zertifikat als einziger
+    Vertrauensanker gesetzt: die Verbindung ist damit gegen Mitlesen und
+    Umleiten geschuetzt, nur eben ohne oeffentliche Zertifizierungsstelle.
+    """
+    if not client.get("api_url", "").startswith("https://"):
+        return None
+    context = ssl.create_default_context()
+    ca_file = client.get("ca_file")
+    if ca_file and Path(ca_file).is_file():
+        try:
+            context.load_verify_locations(cafile=ca_file)
+        except (ssl.SSLError, OSError) as exc:
+            raise SystemExit("Das Zertifikat %s ist nicht lesbar: %s" % (ca_file, exc))
+    return context
+
+
+def build_opener(client: dict) -> urllib.request.OpenerDirector:
+    handlers = [urllib.request.ProxyHandler({})]
+    context = ssl_context(client)
+    if context is not None:
+        handlers.append(urllib.request.HTTPSHandler(context=context))
+    return urllib.request.build_opener(*handlers)
+
+
 def request(client: dict, method: str, path: str, payload: dict | None = None,
             timeout: float = 30, stream: bool = False):
     url = client["api_url"].rstrip("/") + path
@@ -85,7 +114,7 @@ def request(client: dict, method: str, path: str, payload: dict | None = None,
     req.add_header("User-Agent", "ansible-web-run")
     if body is not None:
         req.add_header("Content-Type", "application/json")
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    opener = build_opener(client)
     response = opener.open(req, timeout=timeout)
     if stream:
         return response
@@ -344,6 +373,14 @@ def main(argv: list[str] | None = None) -> int:
         reason = "HTTP %s" % exc.code
     except (urllib.error.URLError, OSError, ConnectionError) as exc:
         reason = str(getattr(exc, "reason", exc))
+        if "CERTIFICATE_VERIFY_FAILED" in reason or "certificate verify failed" in reason:
+            log("Das Serverzertifikat liess sich nicht pruefen. Wurde es neu erzeugt, "
+                "muss der Dienst einmal neu gestartet werden, damit %s aktuell ist."
+                % (client.get("ca_file") or "die Zertifikatsdatei"))
+        elif "hostname" in reason.lower() and "match" in reason.lower():
+            log("Der Name in cron.api_url steht nicht im Zertifikat. Entweder den "
+                "Namen unter server.tls.hostnames ergaenzen und das Zertifikat neu "
+                "erzeugen lassen, oder cron.api_url auf https://127.0.0.1:<port> setzen.")
     except RuntimeError as exc:
         reason = str(exc)
 

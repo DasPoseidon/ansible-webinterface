@@ -28,6 +28,15 @@ DEFAULTS: Dict[str, Any] = {
         "session_ttl_hours": 12,
         "session_idle_hours": 8,
         "behind_proxy": False,
+        "tls": {
+            "enabled": False,
+            "cert_file": None,
+            "key_file": None,
+            "self_signed": True,
+            "hostnames": [],
+            "common_name": None,
+            "days": 825,
+        },
     },
     "paths": {
         "ansible_dir": "/root/ansible",
@@ -107,6 +116,14 @@ class Config:
         self.inventory = self._resolve_under(self.ansible_dir, paths["inventory"])
         self.data_dir = self._resolve_under(self.ansible_dir, paths["data_dir"])
 
+        tls = self.raw["server"].get("tls") or {}
+        self.tls_enabled = bool(tls.get("enabled"))
+        self.tls_dir = self.state_dir / "tls"
+        self.tls_cert = (Path(os.path.expanduser(str(tls["cert_file"])))
+                         if tls.get("cert_file") else self.tls_dir / "server.crt")
+        self.tls_key = (Path(os.path.expanduser(str(tls["key_file"])))
+                        if tls.get("key_file") else self.tls_dir / "server.key")
+
         self.runs_dir = self.state_dir / "runs"
         self.backup_dir = self.state_dir / "backups"
         self.auth_file = self.state_dir / "auth.json"
@@ -128,10 +145,12 @@ class Config:
         cron = self.raw["cron"]
         self.cron_log = Path(cron["log_file"]) if cron.get("log_file") else self.state_dir / "cron.log"
         self.cron_cli = Path(cron["runner_cli"]) if cron.get("runner_cli") else pkg_root / "bin" / "ansible-web-run"
-        self.cron_api_url = cron.get("api_url") or "http://%s:%s" % (
-            "127.0.0.1" if self.raw["server"]["host"] in ("0.0.0.0", "::", "") else self.raw["server"]["host"],
-            self.raw["server"]["port"],
-        )
+        # Auf eine Adresse zeigen, die das Zertifikat auch abdeckt: lauscht der
+        # Dienst auf allen Schnittstellen, spricht der Client ihn lokal an.
+        listen_host = self.raw["server"]["host"]
+        local_host = "127.0.0.1" if listen_host in ("0.0.0.0", "::", "") else listen_host
+        self.cron_api_url = cron.get("api_url") or "%s://%s:%s" % (
+            "https" if self.tls_enabled else "http", local_host, self.raw["server"]["port"])
 
     # -- Hilfsfunktionen ---------------------------------------------------
 
@@ -148,6 +167,21 @@ class Config:
     @property
     def server(self) -> Dict[str, Any]:
         return self.raw["server"]
+
+    @property
+    def tls_cfg(self) -> Dict[str, Any]:
+        return self.raw["server"].get("tls") or {}
+
+    @property
+    def use_secure_cookies(self) -> bool:
+        """Mit TLS gehoert das Sitzungs-Cookie auf 'Secure', ohne waere es unerreichbar."""
+        return bool(self.server.get("secure_cookies")) or self.tls_enabled
+
+    @property
+    def base_url(self) -> str:
+        host = self.server["host"]
+        shown = "localhost" if host in ("0.0.0.0", "::", "") else host
+        return "%s://%s:%s" % ("https" if self.tls_enabled else "http", shown, self.server["port"])
 
     @property
     def run_cfg(self) -> Dict[str, Any]:
@@ -177,6 +211,12 @@ class Config:
     def ensure_dirs(self) -> None:
         for path in (self.state_dir, self.runs_dir, self.backup_dir, self.crontab_backup_dir):
             path.mkdir(parents=True, exist_ok=True)
+        if self.tls_enabled:
+            self.tls_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                os.chmod(self.tls_dir, 0o700)
+            except OSError:
+                pass
         try:
             os.chmod(self.state_dir, 0o700)
         except OSError:
@@ -203,6 +243,7 @@ class Config:
             "inventory": str(self.inventory),
             "data_dir": str(self.data_dir),
             "data_dir_rel": self.relative(self.data_dir),
+            "tls": self.tls_enabled,
             "git_enabled": bool(self.git_cfg["enabled"]),
             "cron_enabled": bool(self.cron_cfg["enabled"]),
             "max_concurrent": self.max_concurrent,

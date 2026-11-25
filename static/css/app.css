@@ -257,7 +257,7 @@ td.nowrap { white-space: nowrap; }
   white-space: nowrap;
 }
 .badge .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
-.badge.ok { color: #7ee291; border-color: #255c32; background: #15321d; }
+.badge.ok, .badge.success { color: #7ee291; border-color: #255c32; background: #15321d; }
 .badge.changed { color: #f0cd72; border-color: #6b531a; background: #33280d; }
 .badge.failed, .badge.error { color: #ff9c95; border-color: #6e2b27; background: #371a19; }
 .badge.unreachable { color: #d4b2fb; border-color: #4e3570; background: #271a3a; }

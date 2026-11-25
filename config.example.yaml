@@ -16,9 +16,36 @@ server:
   host: "127.0.0.1"
   port: 8080
 
-  # Auf true setzen, sobald die Oberflaeche ueber HTTPS ausgeliefert wird.
-  # Das Sitzungs-Cookie wird dann nur noch verschluesselt uebertragen.
+  # Nur noetig, wenn ein Reverse Proxy die Verschluesselung uebernimmt.
+  # Bei server.tls.enabled wird das Cookie ohnehin als "Secure" gesetzt.
   secure_cookies: false
+
+  # HTTPS direkt im Dienst - dann braucht es keinen Reverse Proxy davor.
+  tls:
+    enabled: false
+
+    # Zertifikat und Schluessel. null = <state_dir>/tls/server.crt bzw. .key
+    # Wer ein eigenes Zertifikat hat (z. B. aus der internen PKI oder von
+    # Let's Encrypt), traegt es hier ein und setzt self_signed auf false.
+    cert_file: null
+    key_file: null
+
+    # Fehlt das Zertifikat, erzeugt der Dienst beim Start ein
+    # selbstsigniertes. Es gilt automatisch fuer localhost, 127.0.0.1,
+    # den Hostnamen und alle lokalen IP-Adressen; laeuft es ab, wird es
+    # erneuert.
+    self_signed: true
+
+    # Weitere Namen oder Adressen, unter denen der Dienst erreichbar sein
+    # soll - etwa ein DNS-Name oder eine zweite Schnittstelle. Nach einer
+    # Aenderung die alte Datei unter <state_dir>/tls/ loeschen, damit ein
+    # neues Zertifikat erzeugt wird.
+    hostnames: []
+    #  - ansible.intern
+    #  - 192.168.10.5
+
+    # Laufzeit des selbst erzeugten Zertifikats in Tagen.
+    days: 825
 
   # Nur einschalten, wenn wirklich ein Reverse Proxy davorsteht: dann wird
   # die Client-Adresse aus X-Forwarded-For gelesen. Ohne Proxy waere das

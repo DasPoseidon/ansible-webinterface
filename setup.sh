@@ -5,6 +5,8 @@
 #   ./setup.sh                    venv anlegen, Abhaengigkeiten installieren,
 #                                 Konfiguration vorbereiten
 #   ./setup.sh --admin anna       zusaetzlich einen Administrator anlegen
+#   ./setup.sh --tls              HTTPS einschalten (selbstsigniertes Zertifikat)
+#   ./setup.sh --host 0.0.0.0     im ganzen Netz erreichbar statt nur lokal
 #   ./setup.sh --no-venv          vorhandenes venv weiterverwenden
 #
 # Das Skript ist wiederholbar: ein erneuter Aufruf aktualisiert nur, was
@@ -17,12 +19,16 @@ VENV="$BASE/venv"
 CONFIG="$BASE/config.yaml"
 ADMIN=""
 MAKE_VENV=1
+USE_TLS=0
+BIND_HOST=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --admin)   ADMIN="${2:-}"; shift 2 ;;
+        --host)    BIND_HOST="${2:-}"; shift 2 ;;
+        --tls)     USE_TLS=1; shift ;;
         --no-venv) MAKE_VENV=0; shift ;;
-        -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Unbekannte Option: $1" >&2; exit 2 ;;
     esac
 done
@@ -149,6 +155,35 @@ PY
     warn "Bitte die config.yaml jetzt durchsehen: $CONFIG"
 fi
 
+if [ "$USE_TLS" -eq 1 ]; then
+    if grep -q '^  tls:' "$CONFIG" && grep -q '^    enabled: false' "$CONFIG"; then
+        "$VENV/bin/python" - "$CONFIG" <<'PY'
+import re, sys
+config = sys.argv[1]
+text = open(config, encoding="utf-8").read()
+text = text.replace("  tls:\n    enabled: false", "  tls:\n    enabled: true", 1)
+open(config, "w", encoding="utf-8").write(text)
+PY
+        ok "HTTPS eingeschaltet"
+    else
+        ok "HTTPS ist bereits eingetragen"
+    fi
+fi
+
+if [ -n "$BIND_HOST" ]; then
+    "$VENV/bin/python" - "$CONFIG" "$BIND_HOST" <<'PY'
+import re, sys
+config, host = sys.argv[1], sys.argv[2]
+text = open(config, encoding="utf-8").read()
+text = re.sub(r'(?m)^(  host:).*$', r'\1 "%s"' % host, text, count=1)
+open(config, "w", encoding="utf-8").write(text)
+PY
+    ok "Lauscht auf $BIND_HOST"
+    if [ "$USE_TLS" -eq 0 ] && [ "$BIND_HOST" != "127.0.0.1" ]; then
+        warn "Ohne HTTPS gehen Passwoerter im Klartext ueber das Netz. Erwaege --tls."
+    fi
+fi
+
 chmod 600 "$CONFIG" 2>/dev/null || true
 chmod +x "$BASE/bin/ansible-web-run" "$BASE/bin/ansible-web-serve" "$BASE/bin/ansible-web-admin" 2>/dev/null || true
 
@@ -161,6 +196,30 @@ CHECK=$?
 set -e
 [ "$CHECK" -le 1 ] || die "Die Konfiguration ist fehlerhaft."
 
+TLS_ON="$(ANSIBLE_WEB_CONFIG="$CONFIG" "$VENV/bin/python" - <<PY
+import sys; sys.path.insert(0, "$BASE")
+from app.config import load_config
+print("ja" if load_config().tls_enabled else "nein")
+PY
+)"
+
+if [ "$TLS_ON" = "ja" ]; then
+    say "Zertifikat vorbereiten"
+    ANSIBLE_WEB_CONFIG="$CONFIG" "$VENV/bin/python" - <<PY
+import sys; sys.path.insert(0, "$BASE")
+from app.config import load_config
+from app.tls import ensure_certificate
+cfg = load_config()
+info = ensure_certificate(cfg)
+if info.get("error"):
+    print("    Fehler: %s" % info["error"]); raise SystemExit(1)
+print("    %s %s" % ("Neu erzeugt:" if info.get("generated") else "Vorhanden:", cfg.tls_cert))
+print("    Gueltig fuer: %s" % ", ".join(info.get("sans") or []))
+print("    Fingerabdruck (SHA-256):")
+print("      %s" % info.get("fingerprint_sha256"))
+PY
+fi
+
 if [ -n "$ADMIN" ]; then
     say "Administrator anlegen"
     ANSIBLE_WEB_CONFIG="$CONFIG" "$VENV/bin/python" "$BASE/bin/ansible-web-admin" \
@@ -172,8 +231,7 @@ fi
 HOSTPORT="$(ANSIBLE_WEB_CONFIG="$CONFIG" "$VENV/bin/python" - <<PY
 import sys; sys.path.insert(0, "$BASE")
 from app.config import load_config
-cfg = load_config()
-print("%s:%s" % (cfg.server["host"], cfg.server["port"]))
+print(load_config().base_url)
 PY
 )"
 
@@ -192,10 +250,15 @@ $(printf '\033[1;32m')Fertig.$(printf '\033[0m')
       cp $BASE/deploy/supervisord-ansible-web.conf /etc/supervisor/conf.d/ansible-web.conf
       supervisorctl reread && supervisorctl update
 
-  Danach im Browser:  http://$HOSTPORT
+  Danach im Browser:  $HOSTPORT
 
   Gibt es noch keinen Benutzer, fuehrt die Oberflaeche beim ersten Aufruf
   durch die Ersteinrichtung. Alternativ hier anlegen:
       $BASE/bin/ansible-web-admin benutzer-anlegen admin --rolle admin
+$( [ "$TLS_ON" = "ja" ] && printf '%s' "
+  Das Zertifikat ist selbstsigniert - der Browser warnt beim ersten Aufruf.
+  Den oben gezeigten Fingerabdruck mit dem im Zertifikatsdialog vergleichen,
+  dann die Ausnahme bestaetigen.
+" )
 
 EOF

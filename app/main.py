@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import ConfigError, load_config
 from .deps import Services, get_services, set_services
+from .tls import ensure_certificate
 from . import routes_admin, routes_auth, routes_cron, routes_files, routes_runs
 
 logger = logging.getLogger("ansible-web")
@@ -24,7 +25,7 @@ Ansible-Webinterface
   Inventory           : %s
   Daten-/Konfigordner : %s
   Zustandsverzeichnis : %s
-  Adresse             : http://%s:%s
+  Adresse             : %s
 """
 
 
@@ -36,7 +37,11 @@ async def lifespan(app: FastAPI):
     set_services(services)
 
     logger.info(BANNER, cfg.ansible_dir, cfg.inventory, cfg.data_dir, cfg.state_dir,
-                cfg.server["host"], cfg.server["port"])
+                cfg.base_url)
+    services.tls_info = ensure_certificate(cfg) if cfg.tls_enabled else {"enabled": False}
+    if cfg.tls_enabled and not services.tls_info.get("error"):
+        logger.info("TLS aktiv. Fingerabdruck des Zertifikats (SHA-256):")
+        logger.info("  %s", services.tls_info.get("fingerprint_sha256") or "unbekannt")
     for problem in cfg.validate():
         logger.warning("Konfiguration: %s", problem)
     if not services.auth.has_users():
@@ -122,10 +127,30 @@ def main() -> None:
         raise SystemExit("Konfiguration fehlerhaft: %s" % exc)
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
+
+    options = {}
+    if cfg.tls_enabled:
+        # Das Zertifikat wird vor dem Start bereitgelegt, damit uvicorn es
+        # in beiden Prozessen findet und ein Fehler hier auffaellt - und
+        # nicht etwa still auf unverschluesselt zurueckgefallen wird.
+        info = ensure_certificate(cfg)
+        if info.get("error"):
+            raise SystemExit("TLS ist eingeschaltet, aber es gibt kein brauchbares "
+                             "Zertifikat:\n  %s" % info["error"])
+        options["ssl_certfile"] = str(cfg.tls_cert)
+        options["ssl_keyfile"] = str(cfg.tls_key)
+        if info.get("generated"):
+            print("Neues selbstsigniertes Zertifikat erzeugt: %s" % cfg.tls_cert)
+        print("Fingerabdruck (SHA-256): %s" % (info.get("fingerprint_sha256") or "unbekannt"))
+        print("Beim ersten Aufruf warnt der Browser vor dem unbekannten Zertifikat.\n"
+              "Zum Gegenpruefen den Fingerabdruck oben mit dem im Browser vergleichen.")
+    print("Erreichbar unter: %s" % cfg.base_url)
+
     uvicorn.run("app.main:app", host=str(cfg.server["host"]), port=int(cfg.server["port"]),
                 log_level="info", access_log=False, ws_ping_interval=20,
                 ws_ping_timeout=20, proxy_headers=bool(cfg.server.get("behind_proxy")),
-                forwarded_allow_ips="*" if cfg.server.get("behind_proxy") else None)
+                forwarded_allow_ips="*" if cfg.server.get("behind_proxy") else None,
+                **options)
 
 
 if __name__ == "__main__":

@@ -20,15 +20,16 @@ läuft hier genauso – nur sichtbar.
 1. [Voraussetzungen](#voraussetzungen)
 2. [Installation](#installation)
 3. [Als Dienst einrichten](#als-dienst-einrichten)
-4. [Erster Start](#erster-start)
-5. [Die Bereiche im Einzelnen](#die-bereiche-im-einzelnen)
-6. [Geplante Läufe (Cron)](#geplante-läufe-cron)
-7. [Rollen und Rechte](#rollen-und-rechte)
-8. [Sicherheit](#sicherheit)
-9. [Verzeichnisse und Dateien](#verzeichnisse-und-dateien)
-10. [Konfiguration](#konfiguration)
-11. [Betrieb](#betrieb)
-12. [Fehlersuche](#fehlersuche)
+4. [HTTPS](#https)
+5. [Erster Start](#erster-start)
+6. [Die Bereiche im Einzelnen](#die-bereiche-im-einzelnen)
+7. [Geplante Läufe (Cron)](#geplante-läufe-cron)
+8. [Rollen und Rechte](#rollen-und-rechte)
+9. [Sicherheit](#sicherheit)
+10. [Verzeichnisse und Dateien](#verzeichnisse-und-dateien)
+11. [Konfiguration](#konfiguration)
+12. [Betrieb](#betrieb)
+13. [Fehlersuche](#fehlersuche)
 
 ---
 
@@ -76,6 +77,12 @@ Ob alles passt, sagt:
 ./bin/ansible-web-admin pruefen
 ```
 
+Soll der Dienst gleich verschlüsselt und im Netz erreichbar sein:
+
+```bash
+./setup.sh --tls --host 0.0.0.0
+```
+
 Ein erneuter Aufruf von `./setup.sh` ist jederzeit möglich; eine vorhandene
 `config.yaml` wird nie überschrieben.
 
@@ -105,11 +112,83 @@ supervisorctl reread && supervisorctl update
 /root/ansible-web/bin/ansible-web-serve
 ```
 
-Standardmäßig lauscht der Dienst nur auf `127.0.0.1:8080`. Soll er im Netz
-erreichbar sein, entweder `server.host` auf `0.0.0.0` setzen oder – besser –
-einen Reverse Proxy mit TLS davorstellen. Eine Beispielkonfiguration für nginx
-liegt unter `deploy/nginx-ansible-web.conf`; die dort gesetzten
-Upgrade-Header sind nötig, sonst bleibt die Live-Ansicht leer.
+Standardmäßig lauscht der Dienst nur auf `127.0.0.1:8080`, ist also nur auf dem
+Controller selbst erreichbar. Für den Zugriff vom Arbeitsplatz aus `server.host`
+auf `0.0.0.0` setzen – und dann HTTPS einschalten, siehe nächster Abschnitt.
+
+---
+
+## HTTPS
+
+Der Dienst kann selbst verschlüsselt ausliefern; ein Reverse Proxy ist dafür
+nicht nötig. In der `config.yaml`:
+
+```yaml
+server:
+  host: "0.0.0.0"
+  port: 8443
+  tls:
+    enabled: true
+```
+
+Beim Start wird ein selbstsigniertes Zertifikat erzeugt, falls noch keines
+vorliegt. Es gilt automatisch für `localhost`, `127.0.0.1`, den Hostnamen des
+Controllers und alle lokalen IP-Adressen – egal unter welcher davon die Seite
+später aufgerufen wird, der Name passt. Weitere Namen (etwa ein DNS-Eintrag)
+kommen unter `server.tls.hostnames` dazu:
+
+```yaml
+    hostnames:
+      - ansible.intern
+      - 192.168.10.5
+```
+
+Nach so einer Änderung die alte Datei unter `<state_dir>/tls/` löschen, damit
+beim nächsten Start ein neues Zertifikat entsteht. Läuft das Zertifikat ab,
+wird es von selbst erneuert (ab 30 Tage Restlaufzeit).
+
+**Die Browserwarnung.** Ein selbstsigniertes Zertifikat kennt kein Browser von
+sich aus, beim ersten Aufruf kommt also eine Warnung. Das ist erwartbar und
+kein Fehler. Wer sichergehen will, dass wirklich der eigene Controller
+antwortet und niemand dazwischensitzt, vergleicht den Fingerabdruck: der Dienst
+gibt ihn beim Start aus und zeigt ihn unter **Verwaltung → Zustand**; im
+Browser steht er im Zertifikatsdialog. Stimmen beide überein, kann die
+Ausnahme beruhigt bestätigt werden.
+
+```
+Fingerabdruck (SHA-256): AC:B6:CA:AB:63:37:11:66:45:79:4F:1A:...
+```
+
+**Eigenes Zertifikat** – aus der internen PKI oder von Let's Encrypt – statt
+des selbstsignierten:
+
+```yaml
+  tls:
+    enabled: true
+    self_signed: false
+    cert_file: /etc/ssl/certs/ansible.intern.pem
+    key_file:  /etc/ssl/private/ansible.intern.key
+```
+
+Dann warnt auch der Browser nicht mehr. Erneuert wird ein solches Zertifikat
+nicht von der Anwendung; nach dem Austausch den Dienst neu starten.
+
+Mit eingeschaltetem TLS wird das Sitzungs-Cookie automatisch als `Secure`
+gesetzt, und der Cron-Client spricht den Dienst über `https` an. Er prüft das
+Zertifikat dabei wirklich – nicht etwa mit abgeschalteter Prüfung, sondern
+indem genau dieses Zertifikat als einziger Vertrauensanker gilt.
+
+**Reverse Proxy** bleibt möglich, etwa wenn ohnehin schon einer steht oder ein
+Zertifikat zentral verwaltet wird. Dann TLS im Dienst aus lassen,
+`server.secure_cookies` und `server.behind_proxy` auf `true` setzen und die
+Beispielkonfiguration `deploy/nginx-ansible-web.conf` nehmen. Die dort
+gesetzten Upgrade-Header sind nötig, sonst bleibt die Live-Ansicht leer.
+
+**Ohne alles** geht auch ein SSH-Tunnel – dann bleibt `host` auf `127.0.0.1`:
+
+```bash
+ssh -L 8080:127.0.0.1:8080 root@controller
+```
 
 ---
 
@@ -303,8 +382,9 @@ hat, hat damit faktisch Root-Rechte auf dem Controller und allen verwalteten
 Hosts. Entsprechend:
 
 * **Nicht ungeschützt ins Internet stellen.** Die Vorgabe ist `127.0.0.1`.
-  Für den Zugriff von außen gehört ein Reverse Proxy mit TLS davor, und dann
-  `server.secure_cookies: true` und `server.behind_proxy: true` setzen.
+  Sobald der Dienst über das Netz erreichbar ist, gehört HTTPS eingeschaltet
+  (`server.tls.enabled`), sonst gehen Passwörter im Klartext über die Leitung –
+  auch im eigenen LAN.
 * **Passwörter** werden mit PBKDF2-SHA256 (210.000 Runden) gespeichert,
   niemals im Klartext. Wiederholte Fehlversuche werden pro IP und pro
   Benutzername gebremst.
@@ -345,6 +425,7 @@ Playbook tut.
 <state_dir>/                  voreingestellt /root/ansible-web/state
 ├── runs/<lauf-id>/           meta.json, events.ndjson, output.log, command.txt
 ├── backups/<pfad>/<stempel>  Sicherungskopien geänderter Dateien
+├── tls/                      Zertifikat und Schlüssel (0700, Schlüssel 0600)
 ├── crontab-backups/          crontab vor jeder Änderung
 ├── cron-vars/                Zusatzvariablen geplanter Jobs
 ├── auth.json                 Benutzer und Token-Hashes (0600)
@@ -366,6 +447,9 @@ Alle Einstellungen stehen kommentiert in `config.example.yaml`. Die häufigsten:
 | Einstellung | Bedeutung |
 |---|---|
 | `server.host` / `server.port` | Adresse, auf der gelauscht wird |
+| `server.tls.enabled` | HTTPS direkt im Dienst |
+| `server.tls.hostnames` | weitere Namen/Adressen fürs Zertifikat |
+| `server.tls.cert_file` / `key_file` | eigenes Zertifikat statt selbstsigniert |
 | `paths.ansible_dir` | Verzeichnis mit den Playbooks |
 | `paths.inventory` | Inventory-Datei oder -Verzeichnis |
 | `paths.data_dir` | Unterordner mit Konfig-/Datendateien |
@@ -434,6 +518,21 @@ Zum Gegenprüfen: `cd /root/ansible && ansible-inventory -i inventory.yaml --lis
 Vermutlich wartet das Playbook auf eine Eingabe (`vars_prompt`,
 `--ask-vault-pass`). Den Lauf abbrechen und das Playbook so umstellen, dass es
 ohne Rückfrage auskommt.
+
+**Der Browser warnt vor dem Zertifikat.**
+Bei einem selbstsignierten Zertifikat ist das normal. Fingerabdruck unter
+**Verwaltung → Zustand** mit dem im Browser vergleichen, dann die Ausnahme
+bestätigen. Wer die Warnung loswerden will, hinterlegt unter
+`server.tls.cert_file` ein Zertifikat aus der eigenen PKI.
+
+**„Dieses Zertifikat gilt nicht für diesen Namen".**
+Die Seite wurde unter einem Namen aufgerufen, der nicht im Zertifikat steht.
+Den Namen unter `server.tls.hostnames` eintragen, die Datei unter
+`<state_dir>/tls/` löschen und den Dienst neu starten.
+
+**Geplante Läufe melden „certificate verify failed".**
+Das Zertifikat wurde erneuert, der Cron-Client hat aber noch den alten Stand.
+Dienst einmal neu starten – dabei wird `state/client.json` aufgefrischt.
 
 **Niemand kommt mehr hinein.**
 `./bin/ansible-web-admin passwort-setzen admin` auf dem Controller.

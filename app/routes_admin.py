@@ -50,6 +50,8 @@ async def status_overview(found: Principal = Depends(require("system.view"))) ->
         "ansible_playbook": cfg.ansible_playbook,
         "python": sys.version.split()[0],
         "crontab_available": bool(shutil.which(cfg.cron_cfg.get("crontab_command") or "crontab")),
+        "tls": services.tls_info,
+        "base_url": cfg.base_url,
         "git": git_info,
         "runs": {
             "active": [run.meta() for run in active],

@@ -74,7 +74,7 @@ async def setup(body: SetupBody, request: Request, response: Response) -> Dict[s
     found = services.auth.authenticate(body.name, body.password, ip=client_ip(request))
     found = services.auth.create_session(found, ip=client_ip(request),
                                          user_agent=request.headers.get("user-agent", ""))
-    _set_session_cookies(response, found, bool(services.cfg.server.get("secure_cookies")))
+    _set_session_cookies(response, found, services.cfg.use_secure_cookies)
     services.audit.write(body.name, "einrichtung.admin", body.name, ip=client_ip(request))
     return {"user": found.to_public(), "csrf_token": found.csrf_token}
 
@@ -90,7 +90,7 @@ async def login(body: LoginBody, request: Request, response: Response) -> Dict[s
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc))
     found = services.auth.create_session(found, ip=ip,
                                          user_agent=request.headers.get("user-agent", ""))
-    _set_session_cookies(response, found, bool(services.cfg.server.get("secure_cookies")))
+    _set_session_cookies(response, found, services.cfg.use_secure_cookies)
     services.audit.write(found.name, "anmeldung", "", ip=ip)
     return {"user": found.to_public(), "csrf_token": found.csrf_token}
 
