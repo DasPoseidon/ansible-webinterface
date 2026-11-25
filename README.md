@@ -1,3 +1,5 @@
+Achtung: 100% Vibecode
+
 # Ansible-Webinterface
 
 Eine Weboberfläche für einen bestehenden Ansible-Controller: Playbooks starten
