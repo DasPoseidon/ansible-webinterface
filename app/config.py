@@ -222,17 +222,57 @@ class Config:
         except OSError:
             pass
 
+    def _subdirectories(self) -> List[str]:
+        """Unterordner des Ansible-Verzeichnisses - als Vorschlag fuer data_dir."""
+        skip = set(self.discovery_cfg.get("exclude_dirs") or []) | {"__pycache__"}
+        try:
+            names = sorted(entry.name for entry in self.ansible_dir.iterdir()
+                           if entry.is_dir() and not entry.name.startswith(".")
+                           and entry.name not in skip)
+        except OSError:
+            return []
+        return names[:12]
+
     def validate(self) -> List[str]:
-        """Gibt eine Liste von Problemen zurueck (leer = alles in Ordnung)."""
+        """Gibt eine Liste von Problemen zurueck (leer = alles in Ordnung).
+
+        Die Meldungen nennen moeglichst gleich die Loesung - wer sie liest,
+        sitzt meist vor einer frischen Installation und soll nicht erst
+        raten muessen, welcher Wert gemeint ist.
+        """
         problems: List[str] = []
         if not self.ansible_dir.is_dir():
-            problems.append("Ansible-Verzeichnis nicht gefunden: %s" % self.ansible_dir)
+            problems.append(
+                "Ansible-Verzeichnis nicht gefunden: %s - bitte paths.ansible_dir "
+                "auf das Verzeichnis mit den Playbooks setzen." % self.ansible_dir)
+            return problems
+
         if not self.inventory.exists():
-            problems.append("Inventory nicht gefunden: %s" % self.inventory)
+            problems.append(
+                "Inventory nicht gefunden: %s - bitte paths.inventory setzen "
+                "(relativ zum Ansible-Verzeichnis oder absolut)." % self.inventory)
+
         if not self.data_dir.is_dir():
-            problems.append("Daten-/Konfigordner nicht gefunden: %s" % self.data_dir)
+            hint = ""
+            candidates = self._subdirectories()
+            if candidates:
+                hint = (" Vorhandene Unterordner, einer davon ist vermutlich gemeint: %s."
+                        % ", ".join(candidates))
+            elif self.ansible_dir.is_dir():
+                hint = (" Im Ansible-Verzeichnis gibt es gar keinen Unterordner - dann "
+                        "paths.data_dir auf \".\" setzen.")
+            problems.append(
+                "Daten-/Konfigordner nicht gefunden: %s - bitte paths.data_dir "
+                "anpassen.%s" % (self.data_dir, hint))
+
         if not shutil.which(self.ansible_playbook) and not Path(self.ansible_playbook).exists():
-            problems.append("ansible-playbook nicht gefunden: %s" % self.ansible_playbook)
+            problems.append(
+                "ansible-playbook nicht gefunden: %s - bitte run.ansible_playbook "
+                "auf den vollstaendigen Pfad setzen (und run.ansible_inventory "
+                "daneben). Als Dienst gestartet erbt die Anwendung nur einen "
+                "knappen PATH, in dem z. B. /root/.local/bin oder ein venv fehlt; "
+                "'command -v ansible-playbook' auf der Kommandozeile zeigt den Pfad."
+                % self.ansible_playbook)
         return problems
 
     def to_public_dict(self) -> Dict[str, Any]:

@@ -21,6 +21,8 @@
       let listing = null;
 
       const breadcrumb = h("div", { class: "breadcrumb" });
+      const fallbackNote = h("div", {});
+      let fellBack = false;   // Hinweis stehen lassen, bis der Benutzer selbst wegnavigiert
       const tbody = h("tbody");
       const infoNode = h("span", { class: "faint small" });
       const dropzone = h("div", { class: "dropzone mt" },
@@ -51,6 +53,8 @@
       }
 
       function navigate(target) {
+        fellBack = false;
+        AW.clear(fallbackNote);
         path = target;
         history.replaceState(null, "", AW.linkTo("files", { path }));
         load();
@@ -124,16 +128,33 @@
       async function load() {
         try {
           listing = await API.get("/api/files?path=" + encodeURIComponent(path));
+          if (!fellBack) AW.clear(fallbackNote);
           render();
         } catch (err) {
+          // Ist der eingestellte Datenordner gar nicht vorhanden, nicht in
+          // einer Sackgasse stehenbleiben, sondern das Ansible-Verzeichnis
+          // zeigen - dort sieht man sofort, wie der Ordner wirklich heisst.
+          if (path === dataDir && dataDir) {
+            AW.mount(fallbackNote, h("div", { class: "notice warn" },
+              h("strong", { text: "Der eingestellte Daten-/Konfigordner existiert nicht: " }),
+              h("span", { class: "mono", text: dataDir }),
+              h("div", { class: "small mt", text:
+                "Stattdessen wird das Ansible-Verzeichnis gezeigt. Den richtigen " +
+                "Ordnernamen in der config.yaml unter paths.data_dir eintragen." })));
+            fellBack = true;
+            path = "";
+            history.replaceState(null, "", AW.linkTo("files", { path }));
+            await load();
+            return;
+          }
           listing = null;
           AW.clear(tbody);
           tbody.appendChild(h("tr", {}, h("td", { colspan: "6" },
             h("div", { class: "notice error" },
               h("strong", { text: "Ordner nicht lesbar" }),
               h("div", { class: "small mt", text: err.detail || String(err) }),
-              h("div", { class: "mt" }, h("button", { onclick: () => navigate(dataDir) },
-                "Zurück zum Datenordner"))))));
+              h("div", { class: "mt" }, h("button", { onclick: () => navigate("") },
+                "Zum Ansible-Verzeichnis"))))));
           renderBreadcrumb();
         }
       }
@@ -266,6 +287,7 @@
             canWrite ? h("button", { onclick: createDir }, icon("plus"), "Neuer Ordner") : null,
             canUpload ? h("button", { class: "primary", onclick: () => fileInput.click() },
               icon("upload"), "Hochladen") : null)),
+        fallbackNote,
         h("div", { class: "card pad-0" },
           h("div", { class: "card-head" }, breadcrumb, h("div", { class: "grow" }),
             h("a", { class: "btn small", title: "Diesen Ordner als ZIP herunterladen",
