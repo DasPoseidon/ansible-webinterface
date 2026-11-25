@@ -1,0 +1,146 @@
+# ---------------------------------------------------------------------------
+# Konfiguration des Ansible-Webinterfaces
+#
+# Diese Datei wird ausschliesslich gelesen - die Anwendung schreibt nie
+# hinein. Kommentare bleiben also erhalten. Alles, was die Anwendung selbst
+# verwaltet (Benutzer, Passwort-Hashes, API-Tokens), liegt unter
+# paths.state_dir in auth.json mit Dateirechten 0600.
+#
+# Nach jeder Aenderung den Dienst neu starten.
+# ---------------------------------------------------------------------------
+
+server:
+  # Auf welcher Adresse gelauscht wird.
+  #   127.0.0.1  nur lokal - richtig, wenn ein Reverse Proxy davor steht
+  #   0.0.0.0    im ganzen Netz erreichbar
+  host: "127.0.0.1"
+  port: 8080
+
+  # Auf true setzen, sobald die Oberflaeche ueber HTTPS ausgeliefert wird.
+  # Das Sitzungs-Cookie wird dann nur noch verschluesselt uebertragen.
+  secure_cookies: false
+
+  # Nur einschalten, wenn wirklich ein Reverse Proxy davorsteht: dann wird
+  # die Client-Adresse aus X-Forwarded-For gelesen. Ohne Proxy waere das
+  # eine Einladung, die eigene Adresse zu faelschen.
+  behind_proxy: false
+
+  # Wie lange eine Anmeldung gilt (Stunden) und nach welcher Untaetigkeit
+  # sie verfaellt.
+  session_ttl_hours: 12
+  session_idle_hours: 8
+
+paths:
+  # Das vorhandene Ansible-Verzeichnis mit den Playbooks.
+  ansible_dir: /root/ansible
+
+  # Inventory - relativ zu ansible_dir oder absolut. Ein Verzeichnis geht
+  # auch, dann liest Ansible alle Dateien darin.
+  inventory: inventory.yaml
+
+  # Der Unterordner mit Konfigurationsdateien und Daten. Er ist der
+  # Startpunkt der Dateiverwaltung.
+  data_dir: files
+
+  # Wohin die Anwendung ihre eigenen Daten schreibt: Laeufe, Protokolle,
+  # Benutzer, Sicherungskopien. Sollte nicht im Ansible-Verzeichnis liegen,
+  # sonst taucht alles in Git auf.
+  state_dir: /root/ansible-web/state
+
+discovery:
+  # Wo nach Playbooks gesucht wird (relativ zu ansible_dir).
+  playbook_globs:
+    - "*.yml"
+    - "*.yaml"
+    - "playbooks/*.yml"
+    - "playbooks/*.yaml"
+
+  # Diese Verzeichnisse enthalten keine startbaren Playbooks.
+  exclude_dirs:
+    - .git
+    - roles
+    - group_vars
+    - host_vars
+    - collections
+    - vars
+    - defaults
+    - tasks
+    - handlers
+    - templates
+    - molecule
+
+run:
+  # Pfade zu den Ansible-Programmen. null = im PATH suchen.
+  ansible_playbook: null
+  ansible_inventory: null
+
+  # Wie viele Playbooks gleichzeitig laufen duerfen. 1 ist die sichere
+  # Vorgabe: zwei Laeufe auf denselben Hosts kommen sich sonst ins Gehege.
+  # Weitere Laeufe warten in der Schlange.
+  max_concurrent: 1
+
+  # So viele Laeufe werden aufbewahrt, aeltere werden samt Protokoll geloescht.
+  keep_runs: 300
+
+  # Vorgabe fuer --forks. null = was in der ansible.cfg steht.
+  default_forks: null
+
+  # Datei mit dem Vault-Passwort. Wird gesetzt, wird jedem Lauf
+  # --vault-password-file mitgegeben.
+  vault_password_file: null
+
+  # Zusaetzliche Umgebungsvariablen fuer jeden Lauf.
+  extra_env: {}
+  #  ANSIBLE_HOST_KEY_CHECKING: "False"
+
+  # Farbige Ausgabe von Ansible mitschneiden (die Oberflaeche stellt sie dar).
+  force_color: true
+
+  # Obergrenze je Protokolldatei.
+  max_log_bytes: 52428800
+
+files:
+  # Groesste Datei, die hochgeladen werden darf.
+  max_upload_bytes: 104857600
+
+  # Groesste Datei, die im Editor geoeffnet wird. Groessere lassen sich
+  # weiterhin herunterladen.
+  max_edit_bytes: 2097152
+
+  # Vor jedem Ueberschreiben eine Kopie mit Zeitstempel anlegen.
+  backups: true
+  keep_backups: 30
+
+git:
+  # Ist das Ansible-Verzeichnis ein Git-Repository, wird jede Aenderung
+  # ueber die Oberflaeche als eigener Commit festgehalten.
+  enabled: true
+  auto_commit: true
+
+  # Nach jedem Commit automatisch pushen. Nur sinnvoll, wenn der Zugang
+  # ohne Rueckfrage funktioniert (Deploy-Key o. ae.).
+  push: false
+  remote: origin
+  command: git
+
+  # Domaene fuer die Autor-Adressen der Commits (benutzer@domaene).
+  author_domain: ansible-web.local
+
+cron:
+  enabled: true
+  crontab_command: crontab
+
+  # Pfad zum CLI-Client, den die crontab-Zeilen aufrufen.
+  # null = bin/ansible-web-run neben dieser Konfiguration.
+  runner_cli: null
+
+  # Wohin die Ausgabe der Cron-Laeufe zusaetzlich geschrieben wird.
+  log_file: null
+
+  # Adresse, unter der der Client den Dienst erreicht.
+  # null = aus server.host und server.port abgeleitet.
+  api_url: null
+
+ui:
+  # Steht in der Kopfzeile und im Browser-Titel.
+  title: "Ansible Controller"

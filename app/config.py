@@ -1,0 +1,244 @@
+"""Konfiguration des Webinterfaces.
+
+Die Datei ``config.yaml`` wird ausschliesslich gelesen, niemals von der
+Anwendung zurueckgeschrieben - Kommentare des Administrators bleiben damit
+erhalten. Alles was die Anwendung selbst verwaltet (Benutzer, Passwort-Hashes,
+API-Tokens, Secret-Key) liegt unter ``state_dir`` in ``auth.json``.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import yaml
+
+
+class ConfigError(Exception):
+    """Fehlerhafte oder unvollstaendige Konfiguration."""
+
+
+DEFAULTS: Dict[str, Any] = {
+    "server": {
+        "host": "127.0.0.1",
+        "port": 8080,
+        "secure_cookies": False,
+        "session_ttl_hours": 12,
+        "session_idle_hours": 8,
+        "behind_proxy": False,
+    },
+    "paths": {
+        "ansible_dir": "/root/ansible",
+        "inventory": "inventory.yaml",
+        "data_dir": "files",
+        "state_dir": "/root/ansible-web/state",
+    },
+    "discovery": {
+        "playbook_globs": [
+            "*.yml", "*.yaml",
+            "playbooks/*.yml", "playbooks/*.yaml",
+            "playbook/*.yml", "playbook/*.yaml",
+        ],
+        "exclude_dirs": [
+            ".git", "roles", "group_vars", "host_vars", "collections",
+            "vars", "defaults", "tasks", "handlers", "templates", "molecule",
+            "__pycache__", ".ansible",
+        ],
+    },
+    "run": {
+        "ansible_playbook": None,
+        "ansible_inventory": None,
+        "max_concurrent": 1,
+        "keep_runs": 300,
+        "default_forks": None,
+        "vault_password_file": None,
+        "extra_env": {},
+        "force_color": True,
+        "max_log_bytes": 50 * 1024 * 1024,
+        "list_tasks_timeout": 60,
+    },
+    "files": {
+        "max_upload_bytes": 100 * 1024 * 1024,
+        "max_edit_bytes": 2 * 1024 * 1024,
+        "backups": True,
+        "keep_backups": 30,
+    },
+    "git": {
+        "enabled": True,
+        "auto_commit": True,
+        "push": False,
+        "remote": "origin",
+        "command": "git",
+    },
+    "cron": {
+        "enabled": True,
+        "crontab_command": "crontab",
+        "runner_cli": None,
+        "log_file": None,
+        "api_url": None,
+    },
+    "ui": {
+        "title": "Ansible Controller",
+    },
+}
+
+
+def _deep_merge(base: Any, override: Any) -> Any:
+    if isinstance(base, dict) and isinstance(override, dict):
+        out = dict(base)
+        for key, value in override.items():
+            out[key] = _deep_merge(base.get(key), value) if key in base else value
+        return out
+    return override
+
+
+class Config:
+    """Aufgeloeste Konfiguration mit absoluten Pfaden."""
+
+    def __init__(self, data: Dict[str, Any], source: Optional[Path] = None) -> None:
+        self.source = source
+        self.raw: Dict[str, Any] = _deep_merge(DEFAULTS, data or {})
+
+        paths = self.raw["paths"]
+        self.ansible_dir = Path(os.path.expanduser(str(paths["ansible_dir"]))).resolve()
+        self.state_dir = Path(os.path.expanduser(str(paths["state_dir"]))).resolve()
+        self.inventory = self._resolve_under(self.ansible_dir, paths["inventory"])
+        self.data_dir = self._resolve_under(self.ansible_dir, paths["data_dir"])
+
+        self.runs_dir = self.state_dir / "runs"
+        self.backup_dir = self.state_dir / "backups"
+        self.auth_file = self.state_dir / "auth.json"
+        self.sessions_file = self.state_dir / "sessions.json"
+        self.audit_file = self.state_dir / "audit.ndjson"
+        self.crontab_backup_dir = self.state_dir / "crontab-backups"
+
+        pkg_root = Path(__file__).resolve().parent.parent
+        self.package_dir = pkg_root
+        self.static_dir = pkg_root / "static"
+        self.callback_dir = pkg_root / "callback_plugins"
+
+        run = self.raw["run"]
+        self.ansible_playbook = run["ansible_playbook"] or shutil.which("ansible-playbook") or "ansible-playbook"
+        self.ansible_inventory_bin = run["ansible_inventory"] or shutil.which("ansible-inventory") or "ansible-inventory"
+        self.max_concurrent = max(1, int(run["max_concurrent"]))
+        self.keep_runs = max(10, int(run["keep_runs"]))
+
+        cron = self.raw["cron"]
+        self.cron_log = Path(cron["log_file"]) if cron.get("log_file") else self.state_dir / "cron.log"
+        self.cron_cli = Path(cron["runner_cli"]) if cron.get("runner_cli") else pkg_root / "bin" / "ansible-web-run"
+        self.cron_api_url = cron.get("api_url") or "http://%s:%s" % (
+            "127.0.0.1" if self.raw["server"]["host"] in ("0.0.0.0", "::", "") else self.raw["server"]["host"],
+            self.raw["server"]["port"],
+        )
+
+    # -- Hilfsfunktionen ---------------------------------------------------
+
+    @staticmethod
+    def _resolve_under(base: Path, value: Any) -> Path:
+        candidate = Path(os.path.expanduser(str(value)))
+        if not candidate.is_absolute():
+            candidate = base / candidate
+        return Path(os.path.normpath(str(candidate)))
+
+    def section(self, name: str) -> Dict[str, Any]:
+        return self.raw.get(name, {})
+
+    @property
+    def server(self) -> Dict[str, Any]:
+        return self.raw["server"]
+
+    @property
+    def run_cfg(self) -> Dict[str, Any]:
+        return self.raw["run"]
+
+    @property
+    def files_cfg(self) -> Dict[str, Any]:
+        return self.raw["files"]
+
+    @property
+    def git_cfg(self) -> Dict[str, Any]:
+        return self.raw["git"]
+
+    @property
+    def cron_cfg(self) -> Dict[str, Any]:
+        return self.raw["cron"]
+
+    @property
+    def discovery_cfg(self) -> Dict[str, Any]:
+        return self.raw["discovery"]
+
+    @property
+    def editable_roots(self) -> List[Path]:
+        """Verzeichnisse, in denen Dateioperationen erlaubt sind."""
+        return [self.ansible_dir]
+
+    def ensure_dirs(self) -> None:
+        for path in (self.state_dir, self.runs_dir, self.backup_dir, self.crontab_backup_dir):
+            path.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(self.state_dir, 0o700)
+        except OSError:
+            pass
+
+    def validate(self) -> List[str]:
+        """Gibt eine Liste von Problemen zurueck (leer = alles in Ordnung)."""
+        problems: List[str] = []
+        if not self.ansible_dir.is_dir():
+            problems.append("Ansible-Verzeichnis nicht gefunden: %s" % self.ansible_dir)
+        if not self.inventory.exists():
+            problems.append("Inventory nicht gefunden: %s" % self.inventory)
+        if not self.data_dir.is_dir():
+            problems.append("Daten-/Konfigordner nicht gefunden: %s" % self.data_dir)
+        if not shutil.which(self.ansible_playbook) and not Path(self.ansible_playbook).exists():
+            problems.append("ansible-playbook nicht gefunden: %s" % self.ansible_playbook)
+        return problems
+
+    def to_public_dict(self) -> Dict[str, Any]:
+        """Fuer die Oberflaeche sichtbare, unkritische Teile der Konfiguration."""
+        return {
+            "title": self.raw["ui"]["title"],
+            "ansible_dir": str(self.ansible_dir),
+            "inventory": str(self.inventory),
+            "data_dir": str(self.data_dir),
+            "data_dir_rel": self.relative(self.data_dir),
+            "git_enabled": bool(self.git_cfg["enabled"]),
+            "cron_enabled": bool(self.cron_cfg["enabled"]),
+            "max_concurrent": self.max_concurrent,
+            "max_upload_bytes": int(self.files_cfg["max_upload_bytes"]),
+            "max_edit_bytes": int(self.files_cfg["max_edit_bytes"]),
+        }
+
+    def relative(self, path: Path) -> str:
+        """Pfad relativ zum Ansible-Verzeichnis, fuer die Anzeige."""
+        try:
+            return str(Path(path).resolve().relative_to(self.ansible_dir))
+        except ValueError:
+            return str(path)
+
+
+def default_config_path() -> Path:
+    env = os.environ.get("ANSIBLE_WEB_CONFIG")
+    if env:
+        return Path(env).expanduser()
+    here = Path(__file__).resolve().parent.parent / "config.yaml"
+    if here.exists():
+        return here
+    return Path("/root/ansible-web/config.yaml")
+
+
+def load_config(path: Optional[Path] = None) -> Config:
+    path = Path(path) if path else default_config_path()
+    data: Dict[str, Any] = {}
+    if path.exists():
+        try:
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError as exc:
+            raise ConfigError("config.yaml ist kein gueltiges YAML: %s" % exc) from exc
+        if not isinstance(loaded, dict):
+            raise ConfigError("config.yaml muss ein YAML-Mapping enthalten")
+        data = loaded
+    cfg = Config(data, source=path if path.exists() else None)
+    cfg.ensure_dirs()
+    return cfg

@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""Verwaltung von der Kommandozeile aus.
+
+Gedacht fuer die Ersteinrichtung und fuer den Fall, dass niemand mehr
+hineinkommt - etwa wenn das Administratorpasswort verloren ist.
+
+    ansible-web-admin benutzer-liste
+    ansible-web-admin benutzer-anlegen anna --rolle editor
+    ansible-web-admin passwort-setzen anna
+    ansible-web-admin rolle-setzen anna admin
+    ansible-web-admin benutzer-loeschen anna
+    ansible-web-admin token-liste
+    ansible-web-admin pruefen
+"""
+
+from __future__ import annotations
+
+import argparse
+import getpass
+import os
+import sys
+import time
+from pathlib import Path
+
+BASE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BASE))
+
+try:
+    from app.auth import ROLES, ROLE_LABELS, AuthError, AuthStore
+    from app.config import ConfigError, load_config
+except ImportError as exc:                                   # pragma: no cover
+    raise SystemExit("Die Anwendung konnte nicht geladen werden (%s).\n"
+                     "Dieses Programm mit dem Python aus dem venv aufrufen:\n"
+                     "  %s/venv/bin/python %s …" % (exc, BASE, __file__))
+
+
+def store_for(args) -> "AuthStore":
+    cfg = load_config(Path(args.config) if args.config else None)
+    return AuthStore(cfg.auth_file, cfg.sessions_file)
+
+
+def ask_password(confirm: bool = True) -> str:
+    while True:
+        first = getpass.getpass("Passwort (mindestens 10 Zeichen): ")
+        if len(first) < 10:
+            print("  Zu kurz.")
+            continue
+        if not confirm:
+            return first
+        second = getpass.getpass("Passwort wiederholen: ")
+        if first != second:
+            print("  Die Eingaben stimmen nicht ueberein.")
+            continue
+        return first
+
+
+def cmd_list_users(args) -> int:
+    store = store_for(args)
+    users = store.list_users()
+    if not users:
+        print("Noch keine Benutzer. Anlegen mit: ansible-web-admin benutzer-anlegen <name> --rolle admin")
+        return 0
+    print("%-24s %-10s %-9s %s" % ("BENUTZER", "ROLLE", "ZUSTAND", "LETZTE ANMELDUNG"))
+    for user in users:
+        last = (time.strftime("%d.%m.%Y %H:%M", time.localtime(user["last_login"]))
+                if user["last_login"] else "noch nie")
+        print("%-24s %-10s %-9s %s" % (user["name"], user["role"],
+                                       "gesperrt" if user["disabled"] else "aktiv", last))
+    return 0
+
+
+def cmd_add_user(args) -> int:
+    store = store_for(args)
+    password = args.passwort or ask_password()
+    try:
+        store.add_user(args.name, password, args.rolle)
+    except AuthError as exc:
+        print("Fehler: %s" % exc, file=sys.stderr)
+        return 1
+    print("Benutzer '%s' mit der Rolle '%s' angelegt." % (args.name, args.rolle))
+    return 0
+
+
+def cmd_set_password(args) -> int:
+    store = store_for(args)
+    password = args.passwort or ask_password()
+    try:
+        store.update_user(args.name, password=password)
+    except AuthError as exc:
+        print("Fehler: %s" % exc, file=sys.stderr)
+        return 1
+    print("Passwort von '%s' gesetzt. Alle offenen Sitzungen wurden beendet." % args.name)
+    return 0
+
+
+def cmd_set_role(args) -> int:
+    store = store_for(args)
+    try:
+        store.update_user(args.name, role=args.rolle)
+    except AuthError as exc:
+        print("Fehler: %s" % exc, file=sys.stderr)
+        return 1
+    print("'%s' hat jetzt die Rolle '%s'." % (args.name, args.rolle))
+    return 0
+
+
+def cmd_delete_user(args) -> int:
+    store = store_for(args)
+    try:
+        store.delete_user(args.name)
+    except AuthError as exc:
+        print("Fehler: %s" % exc, file=sys.stderr)
+        return 1
+    print("Benutzer '%s' geloescht." % args.name)
+    return 0
+
+
+def cmd_list_tokens(args) -> int:
+    store = store_for(args)
+    tokens = store.list_api_tokens()
+    if not tokens:
+        print("Keine API-Tokens vorhanden.")
+        return 0
+    print("%-14s %-22s %-10s %s" % ("ID", "NAME", "ROLLE", "ZULETZT BENUTZT"))
+    for token in tokens:
+        last = (time.strftime("%d.%m.%Y %H:%M", time.localtime(token["last_used"]))
+                if token["last_used"] else "noch nie")
+        print("%-14s %-22s %-10s %s" % (token["id"], token["name"], token["role"], last))
+    return 0
+
+
+def cmd_check(args) -> int:
+    try:
+        cfg = load_config(Path(args.config) if args.config else None)
+    except ConfigError as exc:
+        print("Konfiguration fehlerhaft: %s" % exc, file=sys.stderr)
+        return 2
+    print("Konfiguration:        %s" % (cfg.source or "(Vorgabewerte)"))
+    print("Ansible-Verzeichnis:  %s" % cfg.ansible_dir)
+    print("Inventory:            %s" % cfg.inventory)
+    print("Daten-/Konfigordner:  %s" % cfg.data_dir)
+    print("Zustandsverzeichnis:  %s" % cfg.state_dir)
+    print("ansible-playbook:     %s" % cfg.ansible_playbook)
+    print("Adresse:              http://%s:%s" % (cfg.server["host"], cfg.server["port"]))
+    problems = cfg.validate()
+    if problems:
+        print("\nProbleme:")
+        for problem in problems:
+            print("  - %s" % problem)
+        return 1
+    store = AuthStore(cfg.auth_file, cfg.sessions_file)
+    print("\nBenutzer:             %d" % len(store.list_users()))
+    if not store.has_users():
+        print("  Noch kein Benutzer - die Oberflaeche fuehrt beim ersten Aufruf durch\n"
+              "  die Ersteinrichtung. Alternativ hier anlegen:\n"
+              "    ansible-web-admin benutzer-anlegen admin --rolle admin")
+    print("\nAlles in Ordnung.")
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="ansible-web-admin",
+        description="Benutzer und Tokens des Ansible-Webinterfaces verwalten.")
+    parser.add_argument("--config", default=os.environ.get("ANSIBLE_WEB_CONFIG"),
+                        help="Pfad zur config.yaml")
+    sub = parser.add_subparsers(dest="befehl", required=True)
+
+    sub.add_parser("benutzer-liste", help="Benutzer auflisten").set_defaults(func=cmd_list_users)
+
+    add = sub.add_parser("benutzer-anlegen", help="Benutzer anlegen")
+    add.add_argument("name")
+    add.add_argument("--rolle", choices=list(ROLES), default="viewer",
+                     help=" | ".join("%s: %s" % (name, ROLE_LABELS[name]) for name in ROLES))
+    add.add_argument("--passwort", help="Passwort (sonst wird danach gefragt)")
+    add.set_defaults(func=cmd_add_user)
+
+    setpw = sub.add_parser("passwort-setzen", help="Passwort eines Benutzers setzen")
+    setpw.add_argument("name")
+    setpw.add_argument("--passwort")
+    setpw.set_defaults(func=cmd_set_password)
+
+    setrole = sub.add_parser("rolle-setzen", help="Rolle eines Benutzers aendern")
+    setrole.add_argument("name")
+    setrole.add_argument("rolle", choices=list(ROLES))
+    setrole.set_defaults(func=cmd_set_role)
+
+    delete = sub.add_parser("benutzer-loeschen", help="Benutzer loeschen")
+    delete.add_argument("name")
+    delete.set_defaults(func=cmd_delete_user)
+
+    sub.add_parser("token-liste", help="API-Tokens auflisten").set_defaults(func=cmd_list_tokens)
+    sub.add_parser("pruefen", help="Konfiguration und Pfade pruefen").set_defaults(func=cmd_check)
+
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

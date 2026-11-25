@@ -1,0 +1,33 @@
+# systemd-Unit fuer das Ansible-Webinterface.
+#
+# Installation:
+#   cp /root/ansible-web/deploy/ansible-web.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now ansible-web
+
+[Unit]
+Description=Ansible-Webinterface
+Documentation=file:/root/ansible-web/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=root
+WorkingDirectory=/root/ansible-web
+Environment=ANSIBLE_WEB_CONFIG=/root/ansible-web/config.yaml
+ExecStart=/root/ansible-web/bin/ansible-web-serve
+Restart=on-failure
+RestartSec=5s
+KillMode=mixed
+TimeoutStopSec=30
+
+# Laufende Playbooks sollen beim Neustart des Dienstes sauber enden duerfen.
+KillSignal=SIGTERM
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ansible-web
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+# Eigene Konfiguration und Zustand - gehoeren nicht ins Repository.
+config.yaml
+state/
+venv/
+bin/.client-path
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Editoren und Systemdateien
+.vscode/
+.idea/
+*.swp
+.DS_Store

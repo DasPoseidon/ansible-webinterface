@@ -1,0 +1,21 @@
+#!/bin/sh
+# Startet das Ansible-Webinterface. Von systemd, supervisord oder dem
+# Container-Startskript aufrufbar - und zum Ausprobieren auch von Hand.
+set -eu
+
+BASE="$(cd "$(dirname "$0")/.." && pwd)"
+CONFIG="${ANSIBLE_WEB_CONFIG:-$BASE/config.yaml}"
+PYTHON="$BASE/venv/bin/python"
+
+if [ ! -x "$PYTHON" ]; then
+    echo "Kein venv unter $BASE/venv gefunden. Bitte zuerst setup.sh ausfuehren." >&2
+    exit 1
+fi
+if [ ! -f "$CONFIG" ]; then
+    echo "Konfiguration $CONFIG fehlt. Vorlage: $BASE/config.example.yaml" >&2
+    exit 1
+fi
+
+export ANSIBLE_WEB_CONFIG="$CONFIG"
+cd "$BASE"
+exec "$PYTHON" -m app.main

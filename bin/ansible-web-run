@@ -1,0 +1,360 @@
+#!/usr/bin/env python3
+"""Startet ein Playbook ueber das Ansible-Webinterface.
+
+Dieses Programm wird von den Cron-Zeilen aufgerufen. Es meldet den Lauf
+beim Webinterface an, gibt die Ausgabe live auf stdout aus (damit die
+gewohnte Cron-Mail weiterhin alles enthaelt) und endet mit dem
+Rueckgabecode von ansible-playbook.
+
+Ist das Webinterface nicht erreichbar, wird ansible-playbook ersatzweise
+direkt aufgerufen. Der Lauf wird dabei so abgelegt, dass er nach dem
+naechsten Start des Dienstes in der Oberflaeche erscheint. Ein geplanter
+Lauf fällt also nicht aus, nur weil der Dienst gerade nicht laeuft.
+
+Es werden ausschliesslich Module der Python-Standardbibliothek benutzt.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+import uuid
+from pathlib import Path
+
+DEFAULT_CLIENT_FILES = [
+    "/root/ansible-web/state/client.json",
+]
+
+
+def log(message: str, *, quiet: bool = False) -> None:
+    if not quiet:
+        sys.stdout.write("%s %s\n" % (time.strftime("[%Y-%m-%d %H:%M:%S]"), message))
+        sys.stdout.flush()
+
+
+def find_client_file(explicit: str = "") -> Path:
+    candidates = []
+    if explicit:
+        candidates.append(Path(explicit))
+    env = os.environ.get("ANSIBLE_WEB_CLIENT_FILE")
+    if env:
+        candidates.append(Path(env))
+    here = Path(__file__).resolve().parent
+    pointer = here / ".client-path"
+    if pointer.is_file():
+        try:
+            candidates.append(Path(pointer.read_text(encoding="utf-8").strip()))
+        except OSError:
+            pass
+    candidates.append(here.parent / "state" / "client.json")
+    candidates += [Path(p) for p in DEFAULT_CLIENT_FILES]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise SystemExit(
+        "Konfigurationsdatei des Clients nicht gefunden. Gesucht in:\n  %s\n"
+        "Der Dienst legt sie beim Start an. Alternativ mit --client-file angeben."
+        % "\n  ".join(str(c) for c in candidates))
+
+
+def load_client(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SystemExit("Konfigurationsdatei %s ist nicht lesbar: %s" % (path, exc))
+    for key in ("api_url", "token"):
+        if not data.get(key):
+            raise SystemExit("In %s fehlt der Eintrag '%s'" % (path, key))
+    return data
+
+
+def request(client: dict, method: str, path: str, payload: dict | None = None,
+            timeout: float = 30, stream: bool = False):
+    url = client["api_url"].rstrip("/") + path
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = urllib.request.Request(url, data=body, method=method)
+    req.add_header("X-API-Token", client["token"])
+    req.add_header("Accept", "application/json")
+    req.add_header("User-Agent", "ansible-web-run")
+    if body is not None:
+        req.add_header("Content-Type", "application/json")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    response = opener.open(req, timeout=timeout)
+    if stream:
+        return response
+    with response:
+        raw = response.read().decode("utf-8", "replace")
+    return json.loads(raw) if raw.strip() else {}
+
+
+def build_request_payload(args: argparse.Namespace, extra_vars: str) -> dict:
+    return {
+        "playbook": args.playbook,
+        "limit": args.limit or "",
+        "tags": [t for t in (args.tags or "").split(",") if t],
+        "skip_tags": [t for t in (args.skip_tags or "").split(",") if t],
+        "check": bool(args.check),
+        "diff": bool(args.diff),
+        "extra_vars": extra_vars,
+        "verbosity": int(args.verbosity or 0),
+        "forks": int(args.forks) if args.forks else None,
+        "source": "cron",
+        "label": args.name or "",
+    }
+
+
+# -- Weg 1: ueber das Webinterface ----------------------------------------
+
+
+def run_via_api(client: dict, args: argparse.Namespace, payload: dict) -> int:
+    created = request(client, "POST", "/api/runs", payload, timeout=60)
+    run_id = created.get("id")
+    if not run_id:
+        raise RuntimeError("Antwort ohne Lauf-Kennung: %s" % created)
+    log("Lauf %s gestartet (%s)" % (run_id, client["api_url"]), quiet=args.quiet)
+
+    cancelled = {"value": False}
+
+    def on_signal(signum, frame):
+        if cancelled["value"]:
+            return
+        cancelled["value"] = True
+        log("Signal %s empfangen - Lauf wird abgebrochen" % signum, quiet=args.quiet)
+        try:
+            request(client, "POST", "/api/runs/%s/cancel" % run_id, {}, timeout=20)
+        except Exception as exc:
+            log("Abbruch konnte nicht gemeldet werden: %s" % exc, quiet=args.quiet)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, on_signal)
+        except (ValueError, OSError):
+            pass
+
+    deadline = time.time() + args.max_minutes * 60 if args.max_minutes else None
+    try:
+        response = request(client, "GET", "/api/runs/%s/follow" % run_id,
+                           timeout=max(60, args.max_minutes * 60 or 86400), stream=True)
+        with response:
+            for raw in response:
+                if not args.quiet:
+                    sys.stdout.write(raw.decode("utf-8", "replace"))
+                    sys.stdout.flush()
+                if deadline and time.time() > deadline:
+                    log("Zeitgrenze von %d Minuten erreicht - Abbruch" % args.max_minutes)
+                    request(client, "POST", "/api/runs/%s/cancel" % run_id, {}, timeout=20)
+                    break
+    except (urllib.error.URLError, OSError) as exc:
+        log("Verbindung zum Log-Stream verloren (%s), frage den Status ab" % exc,
+            quiet=args.quiet)
+
+    # Endstatus abfragen, notfalls mit kurzem Nachwarten
+    for attempt in range(60):
+        try:
+            meta = request(client, "GET", "/api/runs/%s" % run_id, timeout=30).get("meta", {})
+        except (urllib.error.URLError, OSError) as exc:
+            log("Status nicht abrufbar: %s" % exc, quiet=args.quiet)
+            return 1
+        if meta.get("status") not in ("queued", "running"):
+            rc = meta.get("rc")
+            log("Lauf %s beendet: %s (rc=%s)" % (run_id, meta.get("status"), rc),
+                quiet=args.quiet)
+            if isinstance(rc, int) and rc >= 0:
+                return rc
+            return 0 if meta.get("status") == "success" else 1
+        time.sleep(2)
+    log("Lauf laeuft noch - der Client wartet nicht laenger", quiet=args.quiet)
+    return 0
+
+
+# -- Weg 2: ansible-playbook direkt ---------------------------------------
+
+
+def run_fallback(client: dict, args: argparse.Namespace, payload: dict, reason: str) -> int:
+    log("Webinterface nicht erreichbar (%s) - ansible-playbook wird direkt "
+        "aufgerufen." % reason, quiet=False)
+
+    ansible_dir = Path(client.get("ansible_dir") or ".")
+    binary = client.get("ansible_playbook") or "ansible-playbook"
+    inventory = client.get("inventory") or ""
+    run_id = "%s-%s" % (time.strftime("%Y%m%d-%H%M%S"), uuid.uuid4().hex[:4])
+    runs_dir = Path(client.get("runs_dir") or (ansible_dir / "aw-runs"))
+    run_dir = runs_dir / run_id
+    try:
+        run_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        run_dir = None
+
+    argv = [binary]
+    if inventory:
+        argv += ["-i", inventory]
+    argv.append(args.playbook)
+    if payload["limit"]:
+        argv += ["--limit", payload["limit"]]
+    if payload["tags"]:
+        argv += ["--tags", ",".join(payload["tags"])]
+    if payload["skip_tags"]:
+        argv += ["--skip-tags", ",".join(payload["skip_tags"])]
+    if payload["check"]:
+        argv.append("--check")
+    if payload["diff"]:
+        argv.append("--diff")
+    if payload["forks"]:
+        argv += ["--forks", str(payload["forks"])]
+    if client.get("vault_password_file"):
+        argv += ["--vault-password-file", str(client["vault_password_file"])]
+    if payload["extra_vars"].strip() and run_dir is not None:
+        vars_file = run_dir / "extra_vars.yaml"
+        vars_file.write_text(payload["extra_vars"], encoding="utf-8")
+        argv += ["--extra-vars", "@%s" % vars_file]
+    if payload["verbosity"]:
+        argv.append("-" + "v" * min(4, payload["verbosity"]))
+
+    env = dict(os.environ)
+    env["PYTHONUNBUFFERED"] = "1"
+    if run_dir is not None and client.get("callback_dir"):
+        # Ereignisse auch im Notbetrieb mitschreiben, damit der Lauf spaeter
+        # in der Oberflaeche mit Host-Status sichtbar ist.
+        env["ANSIBLE_CALLBACK_PLUGINS"] = client["callback_dir"]
+        env["ANSIBLE_CALLBACKS_ENABLED"] = "ansible_web_events"
+        env["ANSIBLE_CALLBACK_WHITELIST"] = "ansible_web_events"
+        env["ANSIBLE_WEB_EVENT_FILE"] = str(run_dir / "events.ndjson")
+        env["ANSIBLE_WEB_RUN_ID"] = run_id
+
+    started = time.time()
+    log("$ cd %s && %s" % (ansible_dir, " ".join(argv)), quiet=args.quiet)
+    log_handle = (run_dir / "output.log").open("wb") if run_dir is not None else None
+    try:
+        process = subprocess.Popen(argv, cwd=str(ansible_dir), env=env,
+                                   stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    except OSError as exc:
+        log("ansible-playbook konnte nicht gestartet werden: %s" % exc)
+        if log_handle:
+            log_handle.close()
+        return 127
+    assert process.stdout is not None
+    for chunk in iter(lambda: process.stdout.readline(), b""):
+        if not args.quiet:
+            sys.stdout.buffer.write(chunk)
+            sys.stdout.buffer.flush()
+        if log_handle:
+            log_handle.write(chunk)
+    rc = process.wait()
+    if log_handle:
+        log_handle.close()
+
+    if run_dir is not None:
+        meta = {
+            "id": run_id,
+            "status": "success" if rc == 0 else "failed",
+            "rc": rc,
+            "created_at": started,
+            "started_at": started,
+            "finished_at": time.time(),
+            "request": {
+                "playbook": args.playbook,
+                "limit": payload["limit"],
+                "tags": payload["tags"],
+                "skip_tags": payload["skip_tags"],
+                "check": payload["check"],
+                "diff": payload["diff"],
+                "extra_vars": payload["extra_vars"],
+                "verbosity": payload["verbosity"],
+                "forks": payload["forks"],
+                "user": "cron (Notbetrieb)",
+                "source": "cron-offline",
+                "label": args.name or "",
+            },
+            "argv": argv,
+            "error": "Im Notbetrieb gelaufen: %s" % reason,
+        }
+        try:
+            (run_dir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False),
+                                               encoding="utf-8")
+            log("Lauf als %s abgelegt - er erscheint beim naechsten Start des "
+                "Dienstes in der Oberflaeche." % run_dir, quiet=args.quiet)
+        except OSError:
+            pass
+    log("Beendet mit Rueckgabecode %d" % rc, quiet=args.quiet)
+    return rc
+
+
+# -- Einstieg --------------------------------------------------------------
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="ansible-web-run",
+        description="Startet ein Playbook ueber das Ansible-Webinterface (fuer Cron).")
+    parser.add_argument("--playbook", "-p", required=True,
+                        help="Playbook, relativ zum Ansible-Verzeichnis")
+    parser.add_argument("--limit", "-l", default="", help="Ansible --limit Ausdruck")
+    parser.add_argument("--tags", default="", help="Tags, mit Komma getrennt")
+    parser.add_argument("--skip-tags", default="", help="Zu ueberspringende Tags")
+    parser.add_argument("--check", action="store_true", help="Probelauf (--check)")
+    parser.add_argument("--diff", action="store_true", help="Aenderungen anzeigen (--diff)")
+    parser.add_argument("--extra-vars", "-e", default="", help="Zusatzvariablen als YAML/JSON")
+    parser.add_argument("--extra-vars-file", default="", help="Datei mit Zusatzvariablen")
+    parser.add_argument("--forks", default="", help="Anzahl paralleler Prozesse")
+    parser.add_argument("-v", "--verbose", dest="verbosity", action="count", default=0,
+                        help="Ausfuehrlichere Ausgabe (mehrfach moeglich)")
+    parser.add_argument("--name", default="", help="Bezeichnung des Jobs fuer die Historie")
+    parser.add_argument("--client-file", default="", help="Pfad zu client.json")
+    parser.add_argument("--max-minutes", type=int, default=0,
+                        help="Lauf nach so vielen Minuten abbrechen (0 = unbegrenzt)")
+    parser.add_argument("--no-fallback", action="store_true",
+                        help="Nicht ersatzweise ansible-playbook direkt aufrufen")
+    parser.add_argument("--quiet", "-q", action="store_true", help="Keine Ausgabe")
+    args = parser.parse_args(argv)
+
+    client = load_client(find_client_file(args.client_file))
+
+    extra_vars = args.extra_vars
+    if args.extra_vars_file:
+        try:
+            extra_vars = Path(args.extra_vars_file).read_text(encoding="utf-8")
+        except OSError as exc:
+            log("Datei mit Zusatzvariablen nicht lesbar: %s" % exc)
+            return 2
+    payload = build_request_payload(args, extra_vars)
+
+    try:
+        return run_via_api(client, args, payload)
+    except urllib.error.HTTPError as exc:
+        detail = ""
+        try:
+            detail = exc.read().decode("utf-8", "replace")[:500]
+        except Exception:
+            pass
+        if exc.code in (401, 403):
+            log("Das Webinterface hat die Anmeldung abgelehnt (%s). Token in %s pruefen."
+                % (exc.code, client.get("_source", "client.json")))
+            return 2
+        if exc.code == 400:
+            log("Das Webinterface hat die Anfrage abgelehnt: %s" % detail)
+            return 2
+        reason = "HTTP %s" % exc.code
+    except (urllib.error.URLError, OSError, ConnectionError) as exc:
+        reason = str(getattr(exc, "reason", exc))
+    except RuntimeError as exc:
+        reason = str(exc)
+
+    if args.no_fallback:
+        log("Webinterface nicht erreichbar (%s) und Notbetrieb ist abgeschaltet." % reason)
+        return 1
+    return run_fallback(client, args, payload, reason)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

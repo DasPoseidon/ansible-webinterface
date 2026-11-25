@@ -1,0 +1,9 @@
+# Abhaengigkeiten des Ansible-Webinterfaces.
+# Die Versionen sind festgenagelt, damit ein spaeteres "pip install" den
+# laufenden Dienst nicht unbemerkt veraendert. Zum Aktualisieren die
+# Nummern anheben und setup.sh erneut ausfuehren.
+fastapi==0.165.0
+uvicorn[standard]==0.54.0
+python-multipart==0.0.34
+PyYAML==6.0.4
+croniter==7.0.0
