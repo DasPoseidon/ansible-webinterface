@@ -99,6 +99,10 @@ systemctl enable --now ansible-web
 systemctl status ansible-web
 ```
 
+Liegt die Anwendung woanders, ist in der Unit genau eine Zeile anzupassen:
+`ExecStart`. Alles Weitere – Arbeitsverzeichnis, venv, Konfiguration – leitet
+das Startskript aus diesem Pfad ab.
+
 **Im Container ohne systemd (supervisord):**
 
 ```bash
@@ -479,9 +483,39 @@ passwortlosem `become` arbeiten.
 **Sichern:** es genügt, `config.yaml` und das Zustandsverzeichnis zu sichern.
 Das Ansible-Verzeichnis selbst liegt ohnehin in Git.
 
-**Aktualisieren:** neue Dateien über die alten kopieren (`config.yaml` und
-`state/` dabei stehen lassen), dann `./setup.sh --no-venv` für die
-Abhängigkeiten und den Dienst neu starten.
+**Aktualisieren.** Wurde die Anwendung mit `git clone` geholt, sind es drei
+Schritte:
+
+```bash
+cd /root/ansible-web && git pull
+```
+
+```bash
+./setup.sh --no-venv
+```
+
+```bash
+systemctl restart ansible-web
+```
+
+`git pull` fasst `config.yaml` und `state/` nicht an – beide stehen in der
+`.gitignore`, die eigene Konfiguration und alle Läufe bleiben also erhalten.
+`setup.sh --no-venv` benutzt das vorhandene venv weiter und gleicht nur die
+Abhängigkeiten ab. Der Neustart lädt den neuen Stand und frischt dabei
+`state/client.json` für die Cron-Jobs auf.
+
+Zwei Dinge, die dabei auffallen können:
+
+* **Neue Einstellungen** erscheinen nicht von selbst in der eigenen
+  `config.yaml` – sie greifen mit ihrem Vorgabewert. Was dazugekommen ist,
+  zeigt `git diff HEAD@{1} HEAD -- config.example.yaml`.
+* **Lokal geänderte Dateien** lassen `git pull` stehenbleiben. `git status`
+  zeigt welche; mit `git stash` beiseitelegen, aktualisieren, danach
+  `git stash pop`. Änderungen an Playbooks oder Inventory betrifft das nicht,
+  die liegen in einem anderen Verzeichnis.
+
+Ohne Git: das neue Verzeichnis entpacken, `config.yaml` und `state/`
+hinüberkopieren, dann ebenfalls `./setup.sh --no-venv` und neu starten.
 
 **Aufräumen** geschieht von selbst: alte Läufe werden nach `run.keep_runs`
 entfernt, Sicherungskopien nach `files.keep_backups`, crontab-Sicherungen nach
@@ -533,6 +567,12 @@ Den Namen unter `server.tls.hostnames` eintragen, die Datei unter
 **Geplante Läufe melden „certificate verify failed".**
 Das Zertifikat wurde erneuert, der Cron-Client hat aber noch den alten Stand.
 Dienst einmal neu starten – dabei wird `state/client.json` aufgefrischt.
+
+**`status=200/CHDIR` beim Start durch systemd.**
+Die Unit zeigt auf ein Verzeichnis, das es nicht gibt. In neueren Fassungen
+steht der Pfad nur noch in `ExecStart`; ältere hatten ihn zusätzlich in
+`WorkingDirectory` und `Environment`. Am einfachsten die mitgelieferte Unit
+neu kopieren und dort den einen Pfad setzen.
 
 **Niemand kommt mehr hinein.**
 `./bin/ansible-web-admin passwort-setzen admin` auf dem Controller.

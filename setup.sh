@@ -8,6 +8,7 @@
 #   ./setup.sh --tls              HTTPS einschalten (selbstsigniertes Zertifikat)
 #   ./setup.sh --host 0.0.0.0     im ganzen Netz erreichbar statt nur lokal
 #   ./setup.sh --no-venv          vorhandenes venv weiterverwenden
+#                                 (der uebliche Aufruf nach einem git pull)
 #
 # Das Skript ist wiederholbar: ein erneuter Aufruf aktualisiert nur, was
 # noetig ist, und ueberschreibt niemals eine vorhandene config.yaml.
@@ -74,22 +75,23 @@ fi
 
 # -- venv -------------------------------------------------------------------
 
-if [ "$MAKE_VENV" -eq 1 ]; then
-    say "Virtuelle Umgebung einrichten"
-    if [ -x "$VENV/bin/python" ]; then
-        ok "venv ist schon vorhanden: $VENV"
-    else
-        "$PYTHON" -m venv "$VENV"
-        ok "venv angelegt: $VENV"
-    fi
-    "$VENV/bin/pip" install --quiet --upgrade pip >/dev/null 2>&1 || true
-    say "Abhaengigkeiten installieren"
-    "$VENV/bin/pip" install --quiet -r "$BASE/requirements.txt" \
-        || die "Die Abhaengigkeiten liessen sich nicht installieren. Besteht eine Netzverbindung?"
-    ok "$(grep -c '^[a-zA-Z]' "$BASE/requirements.txt") Pakete installiert"
+say "Virtuelle Umgebung"
+if [ -x "$VENV/bin/python" ]; then
+    ok "venv vorhanden: $VENV"
+elif [ "$MAKE_VENV" -eq 1 ]; then
+    "$PYTHON" -m venv "$VENV"
+    ok "venv angelegt: $VENV"
 else
-    [ -x "$VENV/bin/python" ] || die "--no-venv angegeben, aber unter $VENV liegt kein venv."
+    die "--no-venv angegeben, aber unter $VENV liegt kein venv."
 fi
+
+# Die Abhaengigkeiten werden immer abgeglichen, auch mit --no-venv: beim
+# Aktualisieren ist genau das der Zweck des Aufrufs.
+"$VENV/bin/pip" install --quiet --upgrade pip >/dev/null 2>&1 || true
+say "Abhaengigkeiten abgleichen"
+"$VENV/bin/pip" install --quiet -r "$BASE/requirements.txt" \
+    || die "Die Abhaengigkeiten liessen sich nicht installieren. Besteht eine Netzverbindung?"
+ok "$(grep -c '^[a-zA-Z]' "$BASE/requirements.txt") Pakete auf dem Stand aus requirements.txt"
 
 # -- Konfiguration ----------------------------------------------------------
 

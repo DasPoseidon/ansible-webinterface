@@ -7,12 +7,20 @@ BASE="$(cd "$(dirname "$0")/.." && pwd)"
 CONFIG="${ANSIBLE_WEB_CONFIG:-$BASE/config.yaml}"
 PYTHON="$BASE/venv/bin/python"
 
+if [ ! -d "$BASE/app" ]; then
+    echo "Unter $BASE liegt keine Installation (app/ fehlt)." >&2
+    echo "Zeigt der Pfad im Dienst (ExecStart bzw. command) auf das richtige" >&2
+    echo "Verzeichnis? Erwartet wird <verzeichnis>/bin/ansible-web-serve." >&2
+    exit 1
+fi
 if [ ! -x "$PYTHON" ]; then
-    echo "Kein venv unter $BASE/venv gefunden. Bitte zuerst setup.sh ausfuehren." >&2
+    echo "Kein venv unter $BASE/venv gefunden. Bitte zuerst $BASE/setup.sh ausfuehren." >&2
     exit 1
 fi
 if [ ! -f "$CONFIG" ]; then
-    echo "Konfiguration $CONFIG fehlt. Vorlage: $BASE/config.example.yaml" >&2
+    echo "Konfiguration $CONFIG fehlt." >&2
+    echo "Entweder $BASE/setup.sh ausfuehren oder die Vorlage kopieren:" >&2
+    echo "  cp $BASE/config.example.yaml $CONFIG" >&2
     exit 1
 fi
 
