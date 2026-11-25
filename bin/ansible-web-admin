@@ -160,6 +160,17 @@ def cmd_check(args) -> int:
         for problem in problems:
             print("  - %s" % problem)
         return 1
+    from app.playbooks import PlaybookService
+    found = PlaybookService(cfg).discover()
+    print("\nGefundene Playbooks:  %d" % len(found))
+    for entry in found[:15]:
+        print("  %-40s %s" % (entry["path"],
+                              entry["name"] if entry["valid"] else "FEHLERHAFT: " + (entry["error"] or "")))
+    if not found:
+        print("  Gesucht nach: %s" % " ".join(cfg.discovery_cfg.get("playbook_globs") or []))
+        print("  Als Playbook gilt eine YAML-Datei mit einer Liste von Plays")
+        print("  (Eintraege mit hosts: oder import_playbook:).")
+
     store = AuthStore(cfg.auth_file, cfg.sessions_file)
     print("\nBenutzer:             %d" % len(store.list_users()))
     if not store.has_users():

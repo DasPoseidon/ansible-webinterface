@@ -40,7 +40,9 @@ async def list_playbooks(refresh: bool = False,
                          found: Principal = Depends(require("runs.view"))) -> Dict[str, Any]:
     services = get_services()
     return {"playbooks": services.playbooks.discover(force=refresh),
-            "ansible_dir": str(services.cfg.ansible_dir)}
+            "ansible_dir": str(services.cfg.ansible_dir),
+            "globs": services.cfg.discovery_cfg.get("playbook_globs") or [],
+            "excluded": services.cfg.discovery_cfg.get("exclude_dirs") or []}
 
 
 @router.get("/api/playbooks/preview")

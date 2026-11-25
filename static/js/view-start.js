@@ -10,6 +10,7 @@
     async mount(container, route) {
       const params = route.params || {};
       let playbooks = [];
+      let discovery = {};
       let inventory = null;
       let selectedPlaybook = params.playbook || "";
       let availableTags = [];
@@ -53,9 +54,9 @@
         const visible = playbooks.filter((item) =>
           !needle || (item.path + " " + item.name).toLowerCase().includes(needle));
         if (!visible.length) {
-          playbookList.appendChild(AW.emptyState(playbooks.length
-            ? "Kein Playbook passt zur Suche."
-            : "Im Ansible-Verzeichnis wurde kein Playbook gefunden."));
+          playbookList.appendChild(playbooks.length
+            ? AW.emptyState("Kein Playbook passt zur Suche.")
+            : AW.emptyState("Es wurde kein Playbook gefunden.", noPlaybooksHint()));
           return;
         }
         for (const item of visible) {
@@ -70,6 +71,22 @@
                 : "fehlerhaft: " + (item.error || "") })),
             item.valid ? null : h("span", { class: "badge failed tiny", text: "YAML-Fehler" })));
         }
+      }
+
+      function noPlaybooksHint() {
+        return h("div", { class: "small faint mt", style: { textAlign: "left" } },
+          h("div", { class: "mb", text: "Gesucht wurde in " + (discovery.ansible_dir || "–") +
+                                        " nach diesen Mustern:" }),
+          h("div", { class: "mono tiny mb", text: (discovery.globs || []).join("   ") }),
+          h("div", { text:
+            "Als Playbook gilt eine YAML-Datei, die eine Liste von Plays enthält " +
+            "(also Einträge mit hosts: oder import_playbook:). Dateien mit " +
+            "YAML-Fehlern werden trotzdem aufgeführt." }),
+          h("div", { class: "mt", text:
+            "Liegen die Playbooks tiefer verschachtelt, in der config.yaml unter " +
+            "discovery.playbook_globs ein passendes Muster ergänzen, etwa " +
+            "\"*/*/*.yml\". Übersprungen werden die Ordner: " +
+            (discovery.excluded || []).join(", ") + "." }));
       }
 
       async function selectPlaybook(path) {
@@ -423,6 +440,7 @@
             API.get("/api/inventory" + (force ? "?refresh=true" : "")),
           ]);
           playbooks = pbData.playbooks || [];
+          discovery = pbData;
           inventory = invData;
           if (!selectedPlaybook && playbooks.length) {
             const preferred = playbooks.find((item) => /^site\.ya?ml$/i.test(item.path));

@@ -109,8 +109,12 @@ class PlaybookService:
             return True
         if path.name.startswith("."):
             return True
+        # Im Daten-/Konfigordner liegen Datendateien, keine startbaren
+        # Playbooks. Ist dort aber das Ansible-Verzeichnis selbst eingetragen
+        # (data_dir: "."), darf das nicht alles ausschliessen.
         try:
-            if self.cfg.data_dir in path.parents:
+            if (self.cfg.data_dir != self.cfg.ansible_dir
+                    and self.cfg.data_dir in path.parents):
                 return True
         except (OSError, ValueError):
             pass

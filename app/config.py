@@ -47,8 +47,10 @@ DEFAULTS: Dict[str, Any] = {
     "discovery": {
         "playbook_globs": [
             "*.yml", "*.yaml",
-            "playbooks/*.yml", "playbooks/*.yaml",
-            "playbook/*.yml", "playbook/*.yaml",
+            # Eine Ebene tiefer ebenfalls: Ordner wie playbooks/ oder
+            # kunde-xy/ sind verbreitet. Was dabei kein Playbook ist,
+            # faellt ohnehin durch die Pruefung des Inhalts.
+            "*/*.yml", "*/*.yaml",
         ],
         "exclude_dirs": [
             ".git", "roles", "group_vars", "host_vars", "collections",

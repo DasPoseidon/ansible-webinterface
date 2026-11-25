@@ -65,8 +65,12 @@ paths:
   # auch, dann liest Ansible alle Dateien darin.
   inventory: inventory.yaml
 
-  # Der Unterordner mit Konfigurationsdateien und Daten. Er ist der
-  # Startpunkt der Dateiverwaltung.
+  # Der Unterordner mit Konfigurationsdateien und Daten - der Startpunkt
+  # der Ansicht "Dateien". Von dort laesst sich ohnehin das ganze
+  # Ansible-Verzeichnis durchsehen; diese Angabe spart nur den Weg dorthin.
+  # Playbooks, Inventory und Laeufe sind davon nicht betroffen.
+  # Gibt es keinen solchen Ordner, "." eintragen - dann startet die Ansicht
+  # direkt im Ansible-Verzeichnis.
   data_dir: files
 
   # Wohin die Anwendung ihre eigenen Daten schreibt: Laeufe, Protokolle,
@@ -75,12 +79,15 @@ paths:
   state_dir: /root/ansible-web/state
 
 discovery:
-  # Wo nach Playbooks gesucht wird (relativ zu ansible_dir).
+  # Wo nach Playbooks gesucht wird (relativ zu ansible_dir). Gesucht wird
+  # im Verzeichnis selbst und eine Ebene darunter; was dabei kein Playbook
+  # ist, faellt durch die Pruefung des Inhalts heraus. Liegen Playbooks
+  # noch tiefer, hier ein Muster wie "*/*/*.yml" ergaenzen.
   playbook_globs:
     - "*.yml"
     - "*.yaml"
-    - "playbooks/*.yml"
-    - "playbooks/*.yaml"
+    - "*/*.yml"
+    - "*/*.yaml"
 
   # Diese Verzeichnisse enthalten keine startbaren Playbooks.
   exclude_dirs:

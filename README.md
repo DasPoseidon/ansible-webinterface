@@ -293,7 +293,12 @@ die Entscheidung abgefragt, statt die fremde Änderung zu überschreiben.
 ### Dateien
 
 Der Unterordner mit Konfigurationsdateien und Daten (`paths.data_dir`), von
-dem aus sich das ganze Ansible-Verzeichnis durchsehen lässt. Textdateien lassen
+dem aus sich das ganze Ansible-Verzeichnis durchsehen lässt.
+
+`paths.data_dir` ist dabei **nur der Startpunkt dieser Ansicht** – der Ordner,
+in dem man ohnehin meistens landet. Playbooks, Inventory und Läufe hängen
+nicht daran. Gibt es keinen solchen Unterordner, `"."` eintragen; dann
+beginnt die Ansicht direkt im Ansible-Verzeichnis. Textdateien lassen
 sich bearbeiten (mit derselben Prüf- und Sicherungslogik), beliebige Dateien
 herunter- und hochladen (auch per Drag & Drop), Ordner als ZIP herunterladen,
 umbenennen, löschen und anlegen.
@@ -456,7 +461,8 @@ Alle Einstellungen stehen kommentiert in `config.example.yaml`. Die häufigsten:
 | `server.tls.cert_file` / `key_file` | eigenes Zertifikat statt selbstsigniert |
 | `paths.ansible_dir` | Verzeichnis mit den Playbooks |
 | `paths.inventory` | Inventory-Datei oder -Verzeichnis |
-| `paths.data_dir` | Unterordner mit Konfig-/Datendateien |
+| `paths.data_dir` | Startordner der Ansicht „Dateien" (`"."` = Ansible-Verzeichnis) |
+| `discovery.playbook_globs` | wo nach Playbooks gesucht wird |
 | `run.max_concurrent` | wie viele Läufe gleichzeitig (Vorgabe 1, Rest wartet) |
 | `run.keep_runs` | wie viele Läufe aufbewahrt werden |
 | `run.vault_password_file` | Datei mit dem Vault-Passwort |
@@ -539,10 +545,15 @@ Im Container ist kein cron installiert. Alles andere funktioniert weiter, nur
 der Zeitplan-Bereich nicht.
 
 **Playbooks tauchen nicht in der Liste auf.**
-Gesucht wird nach `discovery.playbook_globs` relativ zu `ansible_dir`. Als
-Playbook gilt eine YAML-Datei, die eine Liste von Plays enthält (`hosts:` oder
-`import_playbook:`). Dateien mit YAML-Fehlern werden trotzdem angezeigt, damit
-man sie reparieren kann.
+Was gesucht wurde, steht in der leeren Liste unter **Playbook starten**, und
+auf der Kommandozeile zeigt es `./bin/ansible-web-admin pruefen`. Gesucht wird
+nach `discovery.playbook_globs` relativ zu `ansible_dir` – ab Werk im
+Verzeichnis selbst und eine Ebene darunter. Liegen die Playbooks tiefer, ein
+Muster wie `"*/*/*.yml"` ergänzen. Als Playbook gilt eine YAML-Datei, die eine
+Liste von Plays enthält (`hosts:` oder `import_playbook:`); Dateien mit
+YAML-Fehlern werden trotzdem angezeigt, damit man sie reparieren kann.
+Übersprungen werden die Ordner aus `discovery.exclude_dirs` (`roles`,
+`group_vars`, …) und der Daten-/Konfigordner.
 
 **„Inventory nicht lesbar".**
 Was die Oberfläche anzeigt, ist die Ausgabe von `ansible-inventory` selbst.
